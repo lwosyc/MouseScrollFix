@@ -12,8 +12,10 @@
 # records has been removed from recent macOS. The remaining options are to let a script
 # drive Finder through Apple Events (which asks for permission to control Finder) or to
 # set the picture by hand. This script does all the mechanical work and leaves you the
-# one click. The --prepare/--finalize split exists so the manual step can be done in a
-# different session than the build.
+# one click.
+#
+# hdiutil prints deprecation notices on recent macOS ("Please use diskutil image ...").
+# They are noise: hdiutil still works and remains the documented, stable interface.
 #
 set -euo pipefail
 
@@ -26,9 +28,16 @@ STAGE="build/dmg-stage"
 RW_IMAGE="build/$APP_NAME-rw.dmg"
 FINAL_IMAGE="build/$APP_NAME-$VERSION.dmg"
 BACKGROUND="$PWD/Resources/dmg-background.png"
-MOUNT_POINT="/Volumes/$VOLNAME"
+# Where the current writable image ended up. macOS appends " 1", " 2", … when a volume
+# name is already taken, so the mount point can never be assumed — it is recorded here
+# and re-read by --finalize, possibly in a later session.
+MOUNT_RECORD="build/.dmg-rw-mount-point"
 
 mode="${1:-interactive}"
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
 
 require_swift() {
     if ! command -v swift >/dev/null 2>&1; then
@@ -37,6 +46,34 @@ require_swift() {
         exit 1
     fi
 }
+
+detach_with_retry() {
+    local target="$1" attempt
+    for attempt in 1 2 3 4 5; do
+        if hdiutil detach "$target" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "warning: «${target}» не отключается, пробую принудительно" >&2
+    hdiutil detach "$target" -force >/dev/null 2>&1 || true
+}
+
+# Volumes left mounted by an earlier run (or by an earlier name collision) must go
+# first, otherwise the new mount point gets a " 1" suffix and stale Finder windows
+# point at images whose files no longer exist.
+detach_stale() {
+    local volume
+    while IFS= read -r volume; do
+        [[ -z "$volume" || ! -d "$volume" ]] && continue
+        echo "==> Отключаю ранее смонтированный том: $volume"
+        detach_with_retry "$volume"
+    done < <(ls -d /Volumes/"$VOLNAME"* 2>/dev/null || true)
+}
+
+# ---------------------------------------------------------------------------
+# steps
+# ---------------------------------------------------------------------------
 
 build_stage() {
     require_swift
@@ -66,16 +103,27 @@ build_stage() {
 }
 
 create_and_mount() {
+    detach_stale
+    rm -f "$RW_IMAGE" "$FINAL_IMAGE" "$MOUNT_RECORD"
+
     echo "==> Creating a writable image"
-    rm -f "$RW_IMAGE" "$FINAL_IMAGE"
     hdiutil create -volname "$VOLNAME" -srcfolder "$STAGE" -fs HFS+ -format UDRW -ov "$RW_IMAGE" >/dev/null
 
     echo "==> Mounting"
-    hdiutil attach -readwrite -nobrowse "$RW_IMAGE" >/dev/null
-    if [[ ! -d "$MOUNT_POINT" ]]; then
-        echo "error: $RW_IMAGE mounted, but $MOUNT_POINT is missing" >&2
+    local output mount_point
+    output="$(hdiutil attach -readwrite -nobrowse "$RW_IMAGE")"
+    # Tab-separated: /dev/diskNsM<tab>Apple_HFS<tab>/Volumes/MouseScrollFix 1.0.0
+    mount_point="$(printf '%s\n' "$output" | awk -F'\t' '/\/Volumes\// {print $NF}' | tail -1)"
+
+    if [[ -z "$mount_point" || ! -d "$mount_point" ]]; then
+        echo "error: не удалось определить точку монтирования $RW_IMAGE" >&2
+        printf '%s\n' "$output" >&2
         exit 1
     fi
+
+    printf '%s\n' "$mount_point" > "$MOUNT_RECORD"
+    MOUNT_POINT="$mount_point"
+    echo "    $MOUNT_POINT"
 }
 
 print_steps() {
@@ -85,14 +133,14 @@ print_steps() {
  Осталось 20 секунд ручной работы — задать фон в Finder
 ────────────────────────────────────────────────────────────────────────────
 
-  1. Окно образа уже открыто в Finder (том «$VOLNAME»).
+  1. Окно образа уже открыто в Finder (том «${VOLNAME}»).
 
   2. Нажмите ⌘J  (Вид → Показать параметры вида / View → Show View Options).
 
   3. Внизу панели: «Фон» → «Картинка» (Background → Picture), затем
      перетащите этот файл в окошко предпросмотра рядом:
 
-         $BACKGROUND
+         ${BACKGROUND}
 
   4. Там же: «Размер значков» = 128, а «Упорядочить» / «Сортировка»
      оставьте как есть (None) — иначе Finder перебьёт позиции иконок.
@@ -104,16 +152,40 @@ print_steps() {
 EOF
 }
 
+resolve_mount_point() {
+    local recorded=""
+    if [[ -f "$MOUNT_RECORD" ]]; then
+        recorded="$(cat "$MOUNT_RECORD")"
+    fi
+    if [[ -n "$recorded" && -d "$recorded" ]]; then
+        printf '%s\n' "$recorded"
+        return 0
+    fi
+    # Fall back to the newest matching volume, in case the record is missing.
+    ls -d /Volumes/"$VOLNAME"* 2>/dev/null | tail -1
+}
+
 finalize() {
-    if [[ ! -d "$MOUNT_POINT" ]]; then
-        echo "error: «$VOLNAME» не смонтирован — нечего отключать." >&2
+    local target
+    target="$(resolve_mount_point)"
+
+    if [[ -z "$target" || ! -d "$target" ]]; then
+        echo "error: «${VOLNAME}» не смонтирован — нечего отключать." >&2
         echo "       Запустите: ./scripts/dmg-add-background.sh --prepare" >&2
         exit 1
     fi
+    if [[ ! -f "$RW_IMAGE" ]]; then
+        echo "error: не найден $RW_IMAGE" >&2
+        exit 1
+    fi
 
-    echo "==> Отключаю том и сжимаю образ"
+    echo "==> Отключаю «${target}»"
     sync
-    hdiutil detach "$MOUNT_POINT" >/dev/null
+    detach_with_retry "$target"
+    detach_stale
+    rm -f "$MOUNT_RECORD"
+
+    echo "==> Сжимаю образ"
     hdiutil convert "$RW_IMAGE" -format UDZO -imagekey zlib-level=9 -o "$FINAL_IMAGE" >/dev/null
     rm -f "$RW_IMAGE"
 
@@ -122,12 +194,16 @@ finalize() {
 
     cat <<EOF
 
-Готово: $FINAL_IMAGE ($(du -h "$FINAL_IMAGE" | cut -f1))
+Готово: ${FINAL_IMAGE} ($(du -h "$FINAL_IMAGE" | cut -f1))
 
 Фон, раскладка иконок и размер окна теперь внутри образа: открываете — окно
 сразу выглядит как надо, со стрелкой на Applications.
 EOF
 }
+
+# ---------------------------------------------------------------------------
+# entry point
+# ---------------------------------------------------------------------------
 
 case "$mode" in
     --prepare)
@@ -138,7 +214,7 @@ case "$mode" in
         cat <<EOF
 Когда закончите — запустите:
 
-    cd "$PWD"
+    cd "${PWD}"
     ./scripts/dmg-add-background.sh --finalize
 
 EOF
