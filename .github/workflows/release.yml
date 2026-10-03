@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: ./scripts/run-tests.sh
+
+      - name: Assemble app bundle
+        run: ./scripts/build-app.sh release
+
+      - name: Build disk image
+        run: ./scripts/make-dmg.sh
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*.dmg
+          generate_release_notes: true
+          body: |
+            Download the `.dmg`, drag **MouseScrollFix** into Applications, launch it and
+            grant the Accessibility permission when the window asks for it.
+
+            Скачайте `.dmg`, перетащите **MouseScrollFix** в Applications, запустите и
+            выдайте разрешение Accessibility, когда приложение об этом попросит.
+
+            > The build is signed ad-hoc, so Gatekeeper may warn on first launch:
+            > right-click the app → Open.
+            > Сборка подписана ad-hoc: при первом запуске щёлкните по приложению
+            > правой кнопкой → «Открыть».

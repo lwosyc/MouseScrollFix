@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    # The app targets macOS 13 and is built with the toolchain that ships with Xcode.
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+          python3 --version
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: ./scripts/run-tests.sh
+
+      - name: Assemble app bundle
+        run: ./scripts/build-app.sh release
+
+      - name: Build disk image
+        run: ./scripts/make-dmg.sh
+
+      - name: Upload disk image
+        uses: actions/upload-artifact@v4
+        with:
+          name: MouseScrollFix-dmg
+          path: build/*.dmg
+          if-no-files-found: error

@@ -1,0 +1,22 @@
+# Build output
+.build/
+build/
+.pydeps/
+.modulecache/
+.tmp/
+
+# Generated artefacts: both are produced by scripts and need not be committed.
+# (`make-dmg.sh` and `build-app.sh` regenerate the icon automatically.)
+Resources/AppIcon.icns
+Resources/AppIcon.iconset/
+Resources/dmg-background.png
+
+# Xcode / SwiftPM noise
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+.swiftpm/
+Package.resolved
+
+# macOS
+.DS_Store
+._*

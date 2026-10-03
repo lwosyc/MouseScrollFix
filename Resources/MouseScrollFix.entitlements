@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Intentionally empty.
+
+	  App Sandbox must stay OFF: a sandboxed process cannot install a global event tap
+	  for other applications' events. No entitlements are needed for Accessibility, for
+	  the I/O Registry enumeration used to detect devices, or for SMAppService login
+	  items.
+
+	  Input Monitoring is not requested and no HID device is ever opened, so no IOKit
+	  temporary-exception entitlement is required either.
+	-->
+</dict>
+</plist>
